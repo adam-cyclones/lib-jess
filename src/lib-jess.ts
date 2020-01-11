@@ -22,7 +22,10 @@ export const compiler =  (async () => {
       } as iOpts);
 
       const file = await readFile(path, 'utf8');
-      return wasm32.compile(file);
+      
+      console.log('WS', wasm32.ast(lex(file)))
+
+      // return wasm32.compile(file);
     }
   }
 })();
@@ -30,4 +33,12 @@ export const compiler =  (async () => {
 export {
   JESS_EXTNAME,
   TESS_EXTNAME
+}
+
+function lex(sourse: string) {
+  return sourse
+    .replace(/((".*?")|('.*?')|\W(?<!(\s|^[\W]|@)))/gm, ' $1 ')
+    .split(/\s/)
+    .filter(Boolean)
+    .join(' ');
 }

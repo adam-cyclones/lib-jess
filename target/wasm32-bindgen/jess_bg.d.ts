@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export function compile(a: number, b: number, c: number): void;
+export function ast(a: number, b: number, c: number): void;
 export function atou8_range(a: number, b: number): number;
 export function atou16_range(a: number, b: number): number;
 export function atou32_range(a: number, b: number): number;

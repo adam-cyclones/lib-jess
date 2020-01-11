@@ -60,6 +60,27 @@ module.exports.compile = function(source) {
     }
 };
 
+/**
+* @param {string} source
+* @returns {string}
+*/
+module.exports.ast = function(source) {
+    try {
+        var ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len0 = WASM_VECTOR_LEN;
+        wasm.ast(8, ptr0, len0);
+        var r0 = getInt32Memory0()[8 / 4 + 0];
+        var r1 = getInt32Memory0()[8 / 4 + 1];
+        return getStringFromWasm0(r0, r1);
+    } finally {
+        wasm.__wbindgen_free(r0, r1);
+    }
+};
+
+module.exports.__wbg_log_fcf1eb9cd2083f05 = function(arg0, arg1) {
+    console.log(getStringFromWasm0(arg0, arg1));
+};
+
 module.exports.__wbindgen_throw = function(arg0, arg1) {
     throw new Error(getStringFromWasm0(arg0, arg1));
 };
