@@ -6,7 +6,9 @@ mod jess_utils;
 
 use jess_utils::matches::{
     name_braced_list::matches_common_curly_braced_list_comma_sep,
-    css_directive::capture_common_css_directive_name
+    css_directive::capture_common_css_directive_name,
+    common_name::matches_common_name,
+    quotes::matches_common_quoted
 };
 
 use std::boxed::Box;
@@ -16,8 +18,8 @@ use regex::Regex;
 use enum_map::{enum_map, Enum, EnumMap};
 
 
-use std::collections::BTreeMap;
-
+use std::collections::HashMap;
+use std::fmt;
 
 use wasm_bindgen::prelude::*;
 use nom::{
@@ -241,8 +243,20 @@ pub fn compile(source: &str) -> String {
 // );
 // strip whitespace from pattern
 
+#[derive(Debug)]
+pub enum LANGUAGE_CONTEXT {
+    JS,
+    CSS,
+    BOTH
+}
 
-#[derive(Debug, Enum)]
+impl fmt::Display for LANGUAGE_CONTEXT {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        return write!(f, "{:?}", self);
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub enum GRAM {
     //     // Assignment
     EQUALS,
@@ -296,14 +310,27 @@ pub enum GRAM {
     OP_INSTANCEOF,
     OP_TYPEOF,
     OP_VOID,
-    //ambiguous
+    // Ambiguous
     NAME,
-    ANY,
-    ANY_STRING,
-    NONE,
+    PANIC,
+    AMBIGUOUS,
+    IGNORE,
+    EOF,
     // Directive
     DIRECTIVE_IMPORT,
+    // Variable
+    LET,
+    CONST,
+    // Values
+    VAL_STRING
 }
+// allow toString
+impl fmt::Display for GRAM {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        return write!(f, "{:?}", self);
+    }
+}
+
 
 pub struct Callback<T> {
     f: Rc<dyn Fn(&ASTNode, &str) -> T>,
@@ -330,132 +357,255 @@ impl<T, F: Fn(&ASTNode, &str) -> T + 'static> From<F> for Callback<T> {
     }
 }
 
-pub struct ASTNode {
-    id: GRAM,
-    allow_next: Vec<GRAM>,
-    token: &'static str,
-    description: &'static str,
-    mathcer: Callback<bool>
+fn matcher_no_op (_self: &ASTNode, token: &str) -> String {
+    return GRAM::IGNORE.to_string()
 }
 
-pub fn def_AST_node (
-    id: GRAM, 
-    token: &'static str,
-    description: &'static str,
-    allow_next: Vec<GRAM>,
-    callback_matches: Callback<bool>
-) -> ASTNode {
-    return ASTNode{
-        id: id,
-        token: token,
-        description: description,
-        allow_next: allow_next,
-        mathcer: Callback::from(callback_matches),
-    };
+pub struct ASTNodeParams {
+    id: GRAM,
+    allow_next: Option<Vec<GRAM>>,
+    token: Option<&'static str>,
+    description: Option<&'static str>,
+    matcher: Callback<String>
 }
+
+impl Default for ASTNodeParams {
+    fn default() -> Self {
+        return Self {
+            id: GRAM::PANIC,
+            token: None,
+            allow_next: None,
+            description: Some("No description provided"),
+            matcher: Callback::from(matcher_no_op),
+        }
+    }
+}
+
+pub struct ASTNode {
+    id: GRAM,
+    allow_next: Option<Vec<GRAM>>,
+    token: Option<&'static str>,
+    description: &'static str,
+    matcher: Callback<String>
+}
+
+impl ASTNode {
+    // Standard definition
+    pub fn def(p: ASTNodeParams) -> ASTNode {
+        return ASTNode {
+            id: p.id,
+            allow_next: p.allow_next,
+            token: p.token,
+            description: p.description.unwrap_or_default(),
+            matcher: p.matcher
+        }
+    }
+}
+
 
 #[wasm_bindgen]
 pub fn ast(source: &str) -> String {
 
-    let ast_def_jess_unknown = def_AST_node(
-        GRAM::NONE,
-        "",
-        "Enexpected token",
-        vec!(),
-        Callback::from(is_none_of_jess)
-    );
+    // <token, GRAM.toString>
+    let mut token_map: HashMap<&str, String> = HashMap::new();
+    let mut AST_def_map: HashMap<String, &ASTNode> = HashMap::new();
 
-    fn is_none_of_jess (_self: &ASTNode, token: &str) -> bool {
-        panic!(format!("Enexpected token {token} at pos:{line}:{col}", token = token, line = 0, col = 0));
-        return false;
+    macro_rules! register_ast_node {
+        ($ast_definition:ident) => {
+            token_map.insert($ast_definition.token.unwrap(), $ast_definition.id.to_string());
+            AST_def_map.insert($ast_definition.id.to_string(), &$ast_definition);
+        };
     }
 
-    let ast_def_jess_import_directive = def_AST_node(
-        GRAM::DIRECTIVE_IMPORT,
-        "@import",
-        "Directive import informs the compiler that another file's contents are required for this file to function.",
-        vec!(
-            GRAM::L_C_BRACE,
-            GRAM::ANY_STRING,
-            GRAM::NAME
-        ),
-        // Matcher callback
-        Callback::from(is_jess_import_directive)
-    );
+    //
+    // EOF
+    //
+    let ast_def_eof = ASTNode::def(ASTNodeParams {
+        token: Some("EOF"),
+        id: GRAM::EOF,
+        description: Some("End of file"),
+        ..Default::default()
+    });
 
-    fn is_jess_import_directive (_self: &ASTNode, token: &str) -> bool {
-        return token == _self.token;
+    register_ast_node!(ast_def_eof);
+
+    //
+    // UNKNOWN grammer found
+    // panic!
+    let ast_def_jess_unknown = ASTNode::def(ASTNodeParams {
+        id: GRAM::PANIC,
+        description: Some("Uncaught SyntaxError: Unexpected token"),
+        ..Default::default()
+    });
+
+    //
+    // AMBIGUOUS grammer found
+    // use matcher
+    let ast_def_jess_ambiguous = ASTNode::def(ASTNodeParams {
+        token: Some(""),
+        id: GRAM::AMBIGUOUS,
+        description: Some("Token is ambiguous, further processing required to identify or panic."),
+        matcher: Callback::from(|_self: &ASTNode, token: &str| -> String {
+            //TBA
+            let (_input, is_common_identifier_name) = matches_common_name(token);
+            let (_input, is_string) = matches_common_quoted(token);
+            if is_common_identifier_name {
+                log("Sub match:");
+                return GRAM::NAME.to_string();
+            } else if is_string {
+                log("Sub match:");
+                return GRAM::VAL_STRING.to_string();
+            } else {
+                log("");
+                return GRAM::PANIC.to_string();
+            }
+        }),
+        ..Default::default()
+    });
+    register_ast_node!(ast_def_jess_ambiguous);
+
+    let ast_def_jess_import_directive = ASTNode::def(ASTNodeParams {
+        token: Some("@import"),
+        id: GRAM::DIRECTIVE_IMPORT,
+        description: Some("Import things from another file"),
+        ..Default::default()
+    });
+    register_ast_node!(ast_def_jess_import_directive);
+
+    // PUNCTUATION defs
+
+    //
+    //  L_C_BRACE
+    //
+    let ast_def_l_c_brace = ASTNode::def(ASTNodeParams {
+        token: Some("{"),
+        id: GRAM::L_C_BRACE,
+        description: Some("Grammer to open, or encapsulate blocks and notations."),
+        ..Default::default()
+    });
+    register_ast_node!(ast_def_l_c_brace);
+
+    //
+    //  R_C_BRACE
+    //
+    let ast_def_r_c_brace = ASTNode::def(ASTNodeParams {
+        token: Some("}"),
+        id: GRAM::R_C_BRACE,
+        description: Some("Grammer to close, or end encapsulate blocks and notations."),
+        ..Default::default()
+    });
+    register_ast_node!(ast_def_r_c_brace);
+
+    //
+    // COLON
+    //
+    let ast_def_colon = ASTNode::def(ASTNodeParams {
+        token: Some(":"),
+        id: GRAM::COLON,
+        description: Some("Used in terary operators, and to devide key values in object like constucts"),
+        ..Default::default()
+    });
+    register_ast_node!(ast_def_colon);
+
+
+    #[derive(Debug)]
+    struct Token {
+        value: &'static str,
+        tokenID: &'static str,
+    }
+
+    impl ToString for Token {
+        fn to_string(&self) -> String {
+            return format!(r#"
+            {{
+                "value": "{value}",
+                "tokenID": "{tokenID}"
+            }},
+            "#,
+                value = self.value,
+                tokenID = self.tokenID
+            );
+        }
+    }
+
+    let test = Token {
+        value: "@",
+        tokenID: "AT"
     };
 
-    let mut AST_GRAMMER = enum_map! {
 
-        // GRAM::EQUALS => 0,
-        // ASSIGNMENT MATH
-            // GRAM::ADDITION_ASSIGNMENT => 0,
-            // GRAM::DIVISION_ASSIGNMENT => 0,
-            // GRAM::MINUS_ASSIGNMENT => 0,
-            // GRAM::MODULUS_ASSIGNMENT => 0,
-            // GRAM::MULTIPLICATION_ASSIGNMENT => 0,
-        // BRACE PAIRS
-            // GRAM::L_C_BRACE => 0,
-            // GRAM::R_C_BRACE => 0,
-            // GRAM::L_P_BRACKET => 0,
-            // GRAM::R_P_BRACKET => 0,
-        // COMPARISON OPERATORS
-            // GRAM::EQUAL_TO => 0,
-            // GRAM::EQUAL_VALUE => 0,
-            // GRAM::GREATER_THAN => 0,
-            // GRAM::GREATER_THAN_OR_EQUAL_TO => 0,
-            // GRAM::LESS_THAN => 0,
-            // GRAM::LESS_THAN_OR_EQUAL_TO => 0,
-            // GRAM::NOT_EQUAL => 0,
-            // GRAM::NOT_EQUAL_VALUE => 0,
-        // OPERATORS: BITWISE
-            // GRAM::BIT_AND => 0,
-            // GRAM::BIT_OR => 0,
-            // GRAM::BIT_NOT => 0,
-            // GRAM::BIT_XOR => 0,
-            // GRAM::BIT_L_SHIFT => 0,
-            // GRAM::BIT_R_SHIFT => 0,
-        // OPERATORS: LOGICAL
-            // GRAM::AND => 0,
-            // GRAM::OR => 0,
-            // GRAM::NOT => 0,
-        // OPERATORS: MATH
-            // GRAM::ADDITION => 0,
-            // GRAM::SUBTRACTION => 0,
-            // GRAM::MULTIPLICATION => 0,
-            // GRAM::DIVISION => 0,
-            // GRAM::MODULUS => 0,
-            // GRAM::INCREMENT => 0,
-            // GRAM::DECREMENT => 0,
-        // PUNCTUATION
-            // GRAM::COLON => 0,
-            // GRAM::COMMA => 0,
-            // GRAM::PERIOD => 0,
-            // GRAM::SEMI_COLON => 0,
-        // WORD OPORATORS
-            // GRAM::OP_DELETE => 0,
-            // GRAM::OP_IN => 0,
-            // GRAM::OP_INSTANCEOF => 0,
-            // GRAM::OP_TYPEOF => 0,
-            // GRAM::OP_VOID => 0,
+    let mut collected_stream: Vec<Token> = vec!();
 
-        //ambiguous
-            // GRAM::NAME => 0,
-            // GRAM::ANY => 0,
-            // GRAM::ANY_STRING => 0,
-        // Directive
-        DIRECTIVE_IMPORT => &ast_def_jess_import_directive,
-        // What the heck is this, Panic!?
-        NONE => &ast_def_jess_unknown
-    };
+    fn token_stream_dump(token_stream: Vec<Token>) -> String {
+        let json_incomplete: String = format!("[{:?}", token_stream.into_iter().map(|item: Token| -> String {
+            item.to_string()
+        }).collect::<String>());
+        return json_incomplete;
+    }
+    collected_stream.push(test);
+    log(&token_stream_dump(collected_stream));
 
 
+    // Parse token streem
+    let mut ittr_tokens = source.split_whitespace().peekable();
+    let eof_token_id = "EOF";
+    let panic_token_id = "PANIC";
+    let ambiguous_token_id = GRAM::AMBIGUOUS.to_string();
+    // Flag to enable panics, should be turned on at release
+    let dont_panic = true;
+    #[allow(irrefutable_let_patterns)]
+    while let token = ittr_tokens.next() {
 
+        let token_id = token_map.get(token.unwrap_or(eof_token_id)).unwrap_or(&ambiguous_token_id);
 
-    for token in source.split_whitespace() {
-        log(token);
+        // token was recognized
+        log(&format!("{}\t\t{}", &token.unwrap_or(eof_token_id), &token_id));
+
+        // This token is either not deterministic, eg names, strings and values or it is unknown and should panic!
+        if token_id.to_string() == ambiguous_token_id {
+            let nondeterministic_token_id = ast_def_jess_ambiguous.matcher.call(&ast_def_jess_ambiguous, &token.unwrap());
+            log(&nondeterministic_token_id);
+
+            // Throw Unexpected token error
+            if &nondeterministic_token_id == panic_token_id {
+                let err_msg = format!("{err} {token}", err = &ast_def_jess_unknown.description, token = &token.unwrap());
+                log(&err_msg);
+                if !dont_panic {
+                    panic!();
+                }
+            }
+        } else {
+            // deterministic known token
+        }
+
+        if token_id == eof_token_id {
+            break;
+        }
+    }
+
+    //     log(token.unwrap());
+
+    //     let next_token = ittr_tokens.peek();
+
+    //     log(next_token.unwrap());
+
+    //     // AMBIGUOUS
+    //     // is used to determine values names, strings and more or even invalid syntax, anything not predictable.
+    //     // ambiguous uses a match statment in its matcher callback
+    //     let ambiguous_token = GRAM::AMBIGUOUS.to_string();
+    //     let token_id_enum_as_string = token_map.get(token.unwrap()).unwrap_or(&ambiguous_token);
+    //     let matched_token_AST_node: &ASTNode = AST_def_map.get(token_id_enum_as_string).unwrap();
+
+    //     // further investivation required
+    //     if matched_token_AST_node.id.to_string() == GRAM::AMBIGUOUS.to_string() {
+    //         matched_token_AST_node.matcher.unwrap().call(matched_token_AST_node, token.unwrap());
+    //     }
+
+    //     log(matched_token_AST_node.description);
+    //     log("\n");
+    //     log("\n");
+    // }
+    // for token in source.split_whitespace().peekable() {
 
         // match token {
         //      => v,
@@ -465,7 +615,7 @@ pub fn ast(source: &str) -> String {
         //     log("found JESS_DIRECTIVE_IMPORT");
         //     continue;
         // }
-    }
+    // }
 
     // let tokens_re = Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap();
 

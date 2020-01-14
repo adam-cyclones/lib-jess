@@ -23,7 +23,7 @@ export const compiler =  (async () => {
 
       const file = await readFile(path, 'utf8');
       
-      console.log('WS', wasm32.ast(lex(file)))
+      console.log(wasm32.ast(lex(file)))
 
       // return wasm32.compile(file);
     }
