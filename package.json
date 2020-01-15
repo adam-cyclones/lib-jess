@@ -8,7 +8,7 @@
     "post-process": "wasm-bindgen ./target/wasm32-unknown-unknown/debug/jess.wasm --target nodejs --out-dir ./target/wasm32-bindgen",
     "build-rust": "cargo +nightly build --target wasm32-unknown-unknown",
     "build-ts-dev": "tsc -p ./",
-    "clean": "rm -rf ./target/*",
+    "clean": "rm -rf ./target/* ./target",
     "test": "cargo test --all --color auto",
     "test-entry-run": "npx ts-node ./src/lib-jess.ts"
   },

@@ -1,5 +1,6 @@
 export interface iOpts {
   tess?: boolean;
+  'dump-tokens'?: boolean;
 }
 
 export interface iJessMethodsFrontend {

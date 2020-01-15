@@ -243,11 +243,25 @@ pub fn compile(source: &str) -> String {
 // );
 // strip whitespace from pattern
 
+// During lexing, we can determine what language this token belongs too
 #[derive(Debug)]
-pub enum LANGUAGE_CONTEXT {
+pub enum LANGUAGE_OWNER {
     JS,
     CSS,
     BOTH
+}
+
+impl fmt::Display for LANGUAGE_OWNER {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        return write!(f, "{:?}", self);
+    }
+}
+
+// During lexing, we can determine what if this is code within the @script block or not
+#[derive(Debug)]
+pub enum LANGUAGE_CONTEXT {
+    JS,
+    CSS
 }
 
 impl fmt::Display for LANGUAGE_CONTEXT {
@@ -256,7 +270,7 @@ impl fmt::Display for LANGUAGE_CONTEXT {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum GRAM {
     //     // Assignment
     EQUALS,
@@ -317,7 +331,13 @@ pub enum GRAM {
     IGNORE,
     EOF,
     // Directive
+    AT_RULE_ANY,
+    AT_RULE_KEYFRAMES,
+    AT_RULE_MEDIA,
+    AT_RULE_SUPPORTS,
+    DIRECTIVE_EXPORT,
     DIRECTIVE_IMPORT,
+    DIRECTIVE_SCRIPT,
     // Variable
     LET,
     CONST,
@@ -464,6 +484,8 @@ pub fn ast(source: &str) -> String {
     });
     register_ast_node!(ast_def_jess_ambiguous);
 
+    // DIRECTIVES and AT-Rules
+
     let ast_def_jess_import_directive = ASTNode::def(ASTNodeParams {
         token: Some("@import"),
         id: GRAM::DIRECTIVE_IMPORT,
@@ -471,6 +493,22 @@ pub fn ast(source: &str) -> String {
         ..Default::default()
     });
     register_ast_node!(ast_def_jess_import_directive);
+
+    let ast_def_jess_export_directive = ASTNode::def(ASTNodeParams {
+        token: Some("@export"),
+        id: GRAM::DIRECTIVE_EXPORT,
+        description: Some("Export things from this file"),
+        ..Default::default()
+    });
+    register_ast_node!(ast_def_jess_export_directive);
+
+    let ast_def_jess_script_directive = ASTNode::def(ASTNodeParams {
+        token: Some("@script"),
+        id: GRAM::DIRECTIVE_SCRIPT,
+        description: Some("Define and use JavaScript or Typescript (depending on arguments) in this block."),
+        ..Default::default()
+    });
+    register_ast_node!(ast_def_jess_script_directive);
 
     // PUNCTUATION defs
 
@@ -507,122 +545,129 @@ pub fn ast(source: &str) -> String {
     });
     register_ast_node!(ast_def_colon);
 
+    //
+    // SEMI_COLON
+    //
+    let ast_def_semi_colon = ASTNode::def(ASTNodeParams {
+        token: Some(";"),
+        id: GRAM::SEMI_COLON,
+        description: Some("Used to signify the end of lines"),
+        ..Default::default()
+    });
+    register_ast_node!(ast_def_semi_colon);
+
+    //
+    // COMMA
+    //
+    let ast_def_comma = ASTNode::def(ASTNodeParams {
+        token: Some(","),
+        id: GRAM::COMMA,
+        description: Some("Puctuation generally used to allow multiple of something"),
+        ..Default::default()
+    });
+    register_ast_node!(ast_def_comma);
+
 
     #[derive(Debug)]
     struct Token {
-        value: &'static str,
-        tokenID: &'static str,
+        value: String,
+        token_id: String,
+        nest_depth: usize
     }
 
     impl ToString for Token {
         fn to_string(&self) -> String {
-            return format!(r#"
-            {{
+            return format!(r#"{{
                 "value": "{value}",
-                "tokenID": "{tokenID}"
-            }},
-            "#,
+                "token_id": "{token_id}",
+                "nest_depth": {nest_depth}
+            }},"#,
                 value = self.value,
-                tokenID = self.tokenID
+                token_id = self.token_id,
+                nest_depth = self.nest_depth
             );
         }
     }
 
-    let test = Token {
-        value: "@",
-        tokenID: "AT"
-    };
-
-
     let mut collected_stream: Vec<Token> = vec!();
 
+    // Token stream to valid JSON output
     fn token_stream_dump(token_stream: Vec<Token>) -> String {
-        let json_incomplete: String = format!("[{:?}", token_stream.into_iter().map(|item: Token| -> String {
+        let json_incomplete: String = format!("[{}", token_stream.into_iter().map(|item: Token| -> String {
             item.to_string()
         }).collect::<String>());
-        return json_incomplete;
+        let mut s = String::from(&json_incomplete);
+        let len = s.trim_end().len() - 3;
+        s.truncate(len);
+        return format!("{}}}]", s);
     }
-    collected_stream.push(test);
-    log(&token_stream_dump(collected_stream));
+
+
 
 
     // Parse token streem
     let mut ittr_tokens = source.split_whitespace().peekable();
-    let eof_token_id = "EOF";
-    let panic_token_id = "PANIC";
+    // Special tokens
+    let eof_token_id = GRAM::EOF.to_string();
+    let panic_token_id = GRAM::PANIC.to_string();
     let ambiguous_token_id = GRAM::AMBIGUOUS.to_string();
+    // Incr and Decr L_C and R_C braces
+    let mut nest_depth = 0;
+    // Track language context to better infrom the parser in future
+    let mut language_owner: String = LANGUAGE_OWNER::BOTH.to_string();
     // Flag to enable panics, should be turned on at release
-    let dont_panic = true;
+    let prevent_panic = true;
     #[allow(irrefutable_let_patterns)]
     while let token = ittr_tokens.next() {
 
-        let token_id = token_map.get(token.unwrap_or(eof_token_id)).unwrap_or(&ambiguous_token_id);
+        let token_id = token_map.get(token.unwrap_or(&eof_token_id)).unwrap_or(&ambiguous_token_id);
 
         // token was recognized
-        log(&format!("{}\t\t{}", &token.unwrap_or(eof_token_id), &token_id));
+        log(&format!("{}\t\t{}", &token.unwrap_or(&eof_token_id), &token_id));
+
+        // Track brace depth
+        if token_id.to_string() == GRAM::L_C_BRACE.to_string() {
+            nest_depth += 1;
+        }
+        if token_id.to_string() == GRAM::R_C_BRACE.to_string() {
+            nest_depth -= 1;
+        }
 
         // This token is either not deterministic, eg names, strings and values or it is unknown and should panic!
         if token_id.to_string() == ambiguous_token_id {
             let nondeterministic_token_id = ast_def_jess_ambiguous.matcher.call(&ast_def_jess_ambiguous, &token.unwrap());
             log(&nondeterministic_token_id);
-
+            // collect tokesns
+            collected_stream.push(Token {
+                value: String::from(token.unwrap()),
+                token_id: String::from(&nondeterministic_token_id),
+                nest_depth: nest_depth
+            });
             // Throw Unexpected token error
-            if &nondeterministic_token_id == panic_token_id {
+            if &nondeterministic_token_id == &panic_token_id {
                 let err_msg = format!("{err} {token}", err = &ast_def_jess_unknown.description, token = &token.unwrap());
                 log(&err_msg);
-                if !dont_panic {
+                if !prevent_panic {
                     panic!();
                 }
             }
         } else {
             // deterministic known token
+            collected_stream.push(Token {
+                value: String::from(token.unwrap_or(&eof_token_id)),
+                token_id: String::from(token_id),
+                nest_depth: nest_depth
+            });
         }
 
-        if token_id == eof_token_id {
+        if token_id == &eof_token_id {
             break;
         }
     }
 
-    //     log(token.unwrap());
+    // log(&token_stream_dump(collected_stream));
 
-    //     let next_token = ittr_tokens.peek();
-
-    //     log(next_token.unwrap());
-
-    //     // AMBIGUOUS
-    //     // is used to determine values names, strings and more or even invalid syntax, anything not predictable.
-    //     // ambiguous uses a match statment in its matcher callback
-    //     let ambiguous_token = GRAM::AMBIGUOUS.to_string();
-    //     let token_id_enum_as_string = token_map.get(token.unwrap()).unwrap_or(&ambiguous_token);
-    //     let matched_token_AST_node: &ASTNode = AST_def_map.get(token_id_enum_as_string).unwrap();
-
-    //     // further investivation required
-    //     if matched_token_AST_node.id.to_string() == GRAM::AMBIGUOUS.to_string() {
-    //         matched_token_AST_node.matcher.unwrap().call(matched_token_AST_node, token.unwrap());
-    //     }
-
-    //     log(matched_token_AST_node.description);
-    //     log("\n");
-    //     log("\n");
-    // }
-    // for token in source.split_whitespace().peekable() {
-
-        // match token {
-        //      => v,
-        //     _:(v) => v
-        // }
-        // if ast_def_jess_import_directive.mathcer.call(&ast_def_jess_import_directive, &token) {
-        //     log("found JESS_DIRECTIVE_IMPORT");
-        //     continue;
-        // }
-    // }
-
-    // let tokens_re = Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap();
-
-
-    // tokens_patern.replace_all(source, " $1");
-
-    return String::from("");
+    return String::from(&token_stream_dump(collected_stream));
 }
 
 mod tests {

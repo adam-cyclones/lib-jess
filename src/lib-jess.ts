@@ -10,6 +10,7 @@ import {
 
 export const compiler =  (async () => {
   // expose to public
+  const sourceMap: any = {};
   return <iJessMethodsFrontend> {
     /**
      * Compiles a Jess sourse file and returns the output/s
@@ -18,12 +19,105 @@ export const compiler =  (async () => {
     async compileFile(path, opts: iOpts = {}) {
       // assign default options
       Object.assign(opts, {
-        tess: false
+        tess: false,
+        'dump-tokens': false, //TODO: developer mode for CLI
       } as iOpts);
 
       const file = await readFile(path, 'utf8');
+      const lexicalAnalysis = JSON.parse(wasm32.ast(lex(file)).replace(/""/gm,'\"'));
+
+      // positions
+      let col = 0;
+      let row = 0;
+
+      // Add lexing results to this file
+      sourceMap[path] = {
+        lexicalAnalysis
+      };
+      // Add positions to this file
+      sourceMap[path].lexicalAnalysis.forEach((item: any) => {
+        item.position = {
+          col,
+          row,
+          formatted: `${path}:${row}:${col}`
+        }
+      });
+
       
-      console.log(wasm32.ast(lex(file)))
+      
+      // par: for (const line of rowView(file)) {
+      //   let atCol = 0;
+        
+      //   atCol = 0;
+      // }
+
+      function *popStream() {
+        let streamCopy = [...lexicalAnalysis].map(entry => entry.value);
+        let lines = rowView(file);
+        let colAt = 0;
+        let rowAt = 0;
+        let line;
+        let lineNo;
+        while (true) {
+          line = lines[rowAt][1];
+          lineNo = lines[rowAt][0];
+          // console.log('row at', rowAt)
+          // console.log(streamCopy);
+          
+          const findThisToken: string = streamCopy[0];
+          colAt = (line as string).indexOf(findThisToken, colAt);
+          const tokenOnThisLine = colAt >= 0;
+
+          // console.log(tokenOnThisLine, findThisToken)
+          if (findThisToken === 'EOF') {
+            return; //
+          }
+          if (tokenOnThisLine) {
+            yield [lineNo, colAt - 1, findThisToken]
+            streamCopy.shift();
+          } else {
+            // move to next line
+            rowAt ++;
+          }
+        }
+      }
+      let test = popStream();
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
+      console.log(test.next().value)
 
       // return wasm32.compile(file);
     }
@@ -37,8 +131,14 @@ export {
 
 function lex(sourse: string) {
   return sourse
-    .replace(/((".*?")|('.*?')|\W(?<!(\s|^[\W]|@)))/gm, ' $1 ')
+    .replace(/((".*?")|('.*?')|#([0-9a-fA-F]{3}){1,2}|\W(?<!(\s|^[\W]|@)))/gm, ' $1 ')
     .split(/\s/)
     .filter(Boolean)
     .join(' ');
+}
+
+function rowView(sourse: string) {
+  return sourse.split(/\n/)
+    .map((text, ind) => [ind + 1, text])
+    .filter(row => row[1]);
 }
