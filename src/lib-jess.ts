@@ -43,81 +43,64 @@ export const compiler =  (async () => {
         }
       });
 
-      
-      
+
+
       // par: for (const line of rowView(file)) {
       //   let atCol = 0;
-        
+
       //   atCol = 0;
       // }
 
-      function *popStream() {
-        let streamCopy = [...lexicalAnalysis].map(entry => entry.value);
-        let lines = rowView(file);
-        let colAt = 0;
-        let rowAt = 0;
-        let line;
-        let lineNo;
-        while (true) {
-          line = lines[rowAt][1];
-          lineNo = lines[rowAt][0];
-          // console.log('row at', rowAt)
-          // console.log(streamCopy);
-          
-          const findThisToken: string = streamCopy[0];
-          colAt = (line as string).indexOf(findThisToken, colAt);
-          const tokenOnThisLine = colAt >= 0;
-
-          // console.log(tokenOnThisLine, findThisToken)
-          if (findThisToken === 'EOF') {
-            return; //
+      // if atleast one panic is found, locate line and col numbers
+      if (lexicalAnalysis.find((token: any) => token.token_id === "PANIC")) {
+        function *locateTokens() {
+          let streamCopy = [...lexicalAnalysis].map(entry => entry.value);
+          let lines = rowView(file);
+          let colAt = 0;
+          let rowAt = 0;
+          let line;
+          let lineNo;
+          let ind = -1;
+          while (true) {
+            line = lines[rowAt][1];
+            lineNo = lines[rowAt][0];
+            const findThisToken: string = streamCopy[0];
+            colAt = (line as string).indexOf(findThisToken, colAt);
+            const tokenOnThisLine = colAt >= 0;
+            if (findThisToken === 'EOF') {
+              return;
+            }
+            if (tokenOnThisLine) {
+              ind ++;
+              yield [lineNo, colAt + 1, findThisToken, `${path}:${lineNo}:${colAt + 1}`, ind]
+              streamCopy.shift();
+            } else {
+              // move to next line
+              rowAt ++;
+            }
           }
-          if (tokenOnThisLine) {
-            yield [lineNo, colAt - 1, findThisToken]
-            streamCopy.shift();
-          } else {
-            // move to next line
-            rowAt ++;
+        }
+
+        for (const [row, col, token, formatted, tokenStreamIndex] of locateTokens()) {
+          sourceMap[path].lexicalAnalysis[tokenStreamIndex].position = {
+            col,
+            row,
+            formatted
           }
         }
       }
-      let test = popStream();
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
-      console.log(test.next().value)
+
+      // Early error handling
+      // brace unbalenced
+      
+      const eofBraceDepth = sourceMap[path].lexicalAnalysis.find((token: any) => token.token_id === 'EOF').brace_depth;
+      if (eofBraceDepth !== 0) {
+        // ERROR_UNBALENCED
+        console.log(sourceMap[path].lexicalAnalysis.reverse().filter((last_token: any) => last_token.brace_depth > 0 && last_token.token_id === 'L_C_BRACE'))
+        // throw new Error(`ERR_UNBALENCED: m`);
+      }
+
+      console.log(sourceMap[path].lexicalAnalysis)
 
       // return wasm32.compile(file);
     }
