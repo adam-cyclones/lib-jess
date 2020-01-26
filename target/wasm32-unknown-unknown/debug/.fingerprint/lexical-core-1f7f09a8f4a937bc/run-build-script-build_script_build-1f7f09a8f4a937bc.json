@@ -1,1 +1,0 @@
-{"rustc":16230752084263022284,"features":"","target":0,"profile":0,"path":0,"deps":[[5141500043439861126,"build_script_build",false,9141407970541401337]],"local":[{"RerunIfChanged":{"output":"wasm32-unknown-unknown/debug/build/lexical-core-1f7f09a8f4a937bc/output","paths":["build.rs"]}}],"rustflags":[],"metadata":0}
